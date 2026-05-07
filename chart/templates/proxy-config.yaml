@@ -35,6 +35,3 @@ subjects:
   - kind: ServiceAccount
     name: claude-session
     namespace: tank-operator-sessions
-  - kind: ServiceAccount
-    name: glimmung
-    namespace: glimmung

@@ -6,11 +6,14 @@
 # consumes the KV secret via ExternalSecret.
 #
 # Historical note: these resources were originally defined in
-# nelsong6/tank-operator's infra/mcp.tf alongside other MCP servers. They were
-# moved here so the MCP server's identity lives in the same repo as the MCP's
-# code. The companion tank-operator PR uses `removed { lifecycle.destroy =
-# false }` blocks so the underlying Azure resources stay put while state
-# ownership transfers — see infra/README.md for the runbook.
+# nelsong6/tank-operator's infra/mcp.tf alongside other MCP servers. The
+# companion tank-operator PR deletes them from that state (Azure destroys
+# them); merging this PR's apply afterward creates them fresh here with the
+# correct `aks_namespace = "mcp-azure-personal"`. Destroy-recreate rather
+# than tofu-state-transfer because the existing FIC subject was stale anyway
+# (built when the namespace was still "mcp-azure", never updated after the
+# chart rename in #12), so workload identity was already broken — no live
+# auth to preserve.
 # ============================================================================
 
 module "mcp_azure_personal" {
@@ -21,7 +24,7 @@ module "mcp_azure_personal" {
   resource_group_location  = data.azurerm_resource_group.main.location
   key_vault_id             = data.azurerm_key_vault.main.id
   aks_oidc_issuer_url      = local.aks_oidc_issuer_url
-  aks_namespace            = "mcp-azure"
+  aks_namespace            = "mcp-azure-personal"
   aks_service_account_name = "mcp-azure-personal"
 
   role_assignments = {

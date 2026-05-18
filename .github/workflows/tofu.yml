@@ -1,0 +1,42 @@
+name: Infrastructure
+
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - 'infra/**'
+      - '.github/workflows/tofu.yml'
+  push:
+    branches: [main]
+    paths:
+      - 'infra/**'
+      - '.github/workflows/tofu.yml'
+  workflow_dispatch:
+
+concurrency:
+  group: opentofu-mcp-azure-personal
+  cancel-in-progress: false
+
+permissions:
+  id-token: write
+  contents: read
+  pull-requests: write
+
+jobs:
+  tofu:
+    # Shared template handles checkout, OIDC login, shared-providers
+    # overlay from infra-bootstrap, init/plan/apply, and the plan PR
+    # comment. We override tofu_version (template default is 1.9.0) so
+    # the `removed { lifecycle { destroy = false } }` syntax (added in
+    # OpenTofu 1.10) is available — that's what lets the cross-repo
+    # migration with tank-operator apply atomically without a manual
+    # `tofu state rm` step.
+    uses: nelsong6/pipeline-templates/.github/workflows/tofu-plan-apply-template.yml@main
+    with:
+      working_directory: infra
+      backend_resource_group: infra
+      backend_storage_account: nelsontofu
+      backend_container: tfstate
+      backend_key: mcp-azure-personal.tfstate
+      tofu_version: '1.12.0'
+    secrets: inherit

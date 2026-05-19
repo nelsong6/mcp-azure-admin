@@ -1518,6 +1518,91 @@ def register_tools(mcp: FastMCP) -> None:
         return plan
 
     @mcp.tool()
+    def keyvault_delete_secret(
+        vault_url: str,
+        name: str,
+        dry_run: bool = True,
+    ) -> dict[str, Any]:
+        """Delete an Azure Key Vault secret.
+
+        Destructive. `dry_run` defaults true and returns the current
+        secret's metadata (without the plaintext value) without writing
+        — so callers can inspect what would be deleted before flipping
+        `dry_run=false`. A 404 from Key Vault surfaces as a structured
+        `existed: false` rather than an error so a re-run after a real
+        delete is idempotent.
+
+        Soft-delete-enabled vaults (romaine-kv is one) move the secret
+        to the "deleted" state on delete. Recover with the Azure portal
+        / `az keyvault secret recover`, or wait out the retention period
+        for permanent purge. This tool does NOT call /deletedsecrets to
+        purge — that's intentionally a separate, even-more-destructive
+        operation if/when it's needed.
+        """
+        if not name:
+            raise ValueError("name is required")
+
+        current_value_length: int | None = None
+        current_attrs: dict[str, Any] = {}
+        current_id: str | None = None
+        current_content_type: str | None = None
+        current_tags: dict[str, str] = {}
+        existed = False
+        try:
+            payload = _kv_request("GET", vault_url, f"/secrets/{name}", ok={200}).json()
+            existed = True
+            value = payload.get("value")
+            current_value_length = len(value) if isinstance(value, str) else None
+            current_attrs = payload.get("attributes") or {}
+            current_id = str(payload.get("id") or "")
+            current_content_type = payload.get("contentType")
+            current_tags = payload.get("tags") or {}
+        except RuntimeError as exc:
+            # Same 404-as-not-found shape as keyvault_set_secret. Any
+            # other RuntimeError (auth, network, 5xx) propagates.
+            if "404" not in str(exc):
+                raise
+
+        plan: dict[str, Any] = {
+            "vault_url": _normalize_vault_url(vault_url),
+            "name": name,
+            "existed": existed,
+            "current_id": current_id,
+            "current_value_length": current_value_length,
+            "current_content_type": current_content_type,
+            "current_tags": current_tags,
+            "current_attributes": current_attrs,
+        }
+
+        if dry_run:
+            plan["dry_run"] = True
+            plan["would_delete"] = existed
+            return plan
+
+        if not existed:
+            # Idempotent: re-running a delete on a missing secret is a
+            # no-op success, not an error. The caller's intent ("ensure
+            # this secret doesn't exist") is satisfied.
+            plan["dry_run"] = False
+            plan["deleted"] = False
+            plan["reason"] = "secret does not exist (idempotent no-op)"
+            return plan
+
+        resp = _kv_request("DELETE", vault_url, f"/secrets/{name}", ok={200}).json()
+        deleted_id = str(resp.get("id") or "")
+        plan["dry_run"] = False
+        plan["deleted"] = True
+        plan["deleted_id"] = deleted_id
+        # Soft-delete metadata surfaced when the vault has soft-delete
+        # enabled (romaine-kv: yes). recoveryId points at the
+        # /deletedsecrets/<name> entry; scheduled_purge_date is when
+        # the soft-delete retention expires.
+        plan["recovery_id"] = resp.get("recoveryId")
+        plan["scheduled_purge_date"] = resp.get("scheduledPurgeDate")
+        plan["deleted_date"] = resp.get("deletedDate")
+        return plan
+
+    @mcp.tool()
     def pg_query(
         host: str,
         database: str,

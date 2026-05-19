@@ -71,10 +71,11 @@ resource "azurerm_cosmosdb_sql_role_assignment" "infra_serverless_contributor" {
 # above is scoped to data.azurerm_client_config.current.subscription_id, so
 # it never reaches the cluster — hence the explicit scope here.
 #
-# Azure Kubernetes Service Contributor Role covers the two ARM actions
-# run_aks_command needs:
+# Azure Kubernetes Service Contributor Role covers the AKS ARM actions
+# these tools need:
 #   Microsoft.ContainerService/managedClusters/runCommand/action
 #   Microsoft.ContainerService/managedClusters/commandResults/read
+#   Microsoft.ContainerService/managedClusters/agentPools/deleteMachines/action
 #
 # infra-aks has disableLocalAccounts=false and aadProfile=null, so
 # runCommand falls through to the local admin kubeconfig path — no

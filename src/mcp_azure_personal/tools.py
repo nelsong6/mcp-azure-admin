@@ -33,6 +33,7 @@ RESOURCES_API_VERSION = "2021-04-01"
 STATIC_SITE_API_VERSION = "2024-04-01"
 RESOURCE_GROUP_API_VERSION = "2024-11-01"
 AKS_API_VERSION = "2024-10-01"
+AKS_AGENT_POOL_API_VERSION = "2025-07-01"
 MANAGED_IDENTITY_API_VERSION = "2023-01-31"
 COST_MANAGEMENT_API_VERSION = "2023-11-01"
 POLL_TIMEOUT_SECONDS = 600
@@ -532,6 +533,39 @@ def _truncate_text(text: str, max_chars: int | None, *, tail: bool = False) -> s
 def _require_confirmation(value: str, confirmation: str | None, label: str) -> None:
     if confirmation != value:
         raise ValueError(f"{label} confirmation must exactly equal {value!r}")
+
+
+def _normalize_aks_machine_names(machine_names: list[str]) -> list[str]:
+    if not machine_names:
+        raise ValueError("machine_names must contain at least one machine name")
+    if len(machine_names) > 20:
+        raise ValueError("machine_names may contain at most 20 machine names")
+
+    normalized = []
+    seen = set()
+    allowed = set("abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789-_.")
+    for index, raw in enumerate(machine_names):
+        value = str(raw or "").strip()
+        if not value:
+            raise ValueError(f"machine_names[{index}] must not be empty")
+        if any(ch not in allowed for ch in value):
+            raise ValueError(
+                f"machine_names[{index}] may only contain letters, numbers, '-', '_', and '.'"
+            )
+        if value in seen:
+            raise ValueError(f"machine_names contains duplicate value {value!r}")
+        normalized.append(value)
+        seen.add(value)
+    return normalized
+
+
+def _require_same_aks_machine_names(
+    machine_names: list[str],
+    confirm_machine_names: list[str],
+) -> None:
+    confirmed = _normalize_aks_machine_names(confirm_machine_names)
+    if set(confirmed) != set(machine_names):
+        raise ValueError("confirm_machine_names must contain exactly the same names as machine_names")
 
 
 def register_tools(mcp: FastMCP) -> None:
@@ -1331,6 +1365,78 @@ def register_tools(mcp: FastMCP) -> None:
             "cluster": cluster,
             "command": command,
             "logs": logs,
+            "result": payload,
+        }
+
+    @mcp.tool()
+    def aks_delete_agent_pool_machines(
+        resource_group: str,
+        cluster: str,
+        agent_pool: str,
+        machine_names: list[str],
+        confirm_agent_pool: str,
+        confirm_machine_names: list[str],
+        subscription: str | None = None,
+        dry_run: bool = True,
+        timeout_seconds: int = POLL_TIMEOUT_SECONDS,
+    ) -> dict[str, Any]:
+        """Delete specific machines from an AKS agent pool.
+
+        Use after confirming the named Kubernetes nodes are drained or otherwise
+        safe to remove. This calls the AKS agentPools/deleteMachines ARM action,
+        which deletes the selected machines instead of asking Azure to choose a
+        scale-down victim. Destructive guards: confirm_agent_pool must exactly
+        match agent_pool, and confirm_machine_names must contain exactly the
+        same machine names. dry_run defaults true.
+        """
+        _require_confirmation(agent_pool, confirm_agent_pool, "agent pool")
+        names = _normalize_aks_machine_names(machine_names)
+        _require_same_aks_machine_names(names, confirm_machine_names)
+        if timeout_seconds < 30 or timeout_seconds > 1800:
+            raise ValueError("timeout_seconds must be between 30 and 1800")
+
+        sub = _subscription(subscription)
+        path = (
+            f"/subscriptions/{sub}/resourceGroups/{resource_group}"
+            f"/providers/Microsoft.ContainerService/managedClusters/{cluster}"
+            f"/agentPools/{agent_pool}/deleteMachines"
+            f"?api-version={AKS_AGENT_POOL_API_VERSION}"
+        )
+        body = {"machineNames": names}
+
+        if dry_run:
+            return {
+                "dry_run": True,
+                "subscription": sub,
+                "resource_group": resource_group,
+                "cluster": cluster,
+                "agent_pool": agent_pool,
+                "machine_names": names,
+                "api_version": AKS_AGENT_POOL_API_VERSION,
+                "request": {
+                    "method": "POST",
+                    "path": path,
+                    "body": body,
+                },
+            }
+
+        resp = _request("POST", path, ok={200, 202, 204}, json=body)
+        if resp.status_code == 202 and (operation_url := _operation_url(resp)):
+            payload = _poll(operation_url, timeout_seconds=timeout_seconds)
+        elif resp.text:
+            payload = resp.json()
+        else:
+            payload = {"status": "Succeeded"}
+
+        return {
+            "dry_run": False,
+            "deleted": True,
+            "subscription": sub,
+            "resource_group": resource_group,
+            "cluster": cluster,
+            "agent_pool": agent_pool,
+            "machine_names": names,
+            "api_version": AKS_AGENT_POOL_API_VERSION,
             "result": payload,
         }
 

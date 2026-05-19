@@ -11,7 +11,7 @@ image:
   # SHA-pinned. .github/workflows/build.yml rewrites this tag on every push to main
   # via a `[skip ci]` follow-up commit. Quoted so all-digit short-SHAs don't
   # become floats.
-  tag: "d441d04"
+  tag: "dfa799e"
   pullPolicy: IfNotPresent
 
 # Loopback-only port the MCP server listens on. Sidecar fronts it.
